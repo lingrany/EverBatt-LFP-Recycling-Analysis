@@ -123,25 +123,35 @@ def find_value(filepath, keyword):
 
 
 if __name__ == '__main__':
-    import sys
+    import argparse
 
-    # 默认读取 2023 版
-    src = 'EverBatt 2023.xlsm'
+    parser = argparse.ArgumentParser(
+        description='Fix XML issues in EverBatt xlsm and read its contents',
+    )
+    parser.add_argument('file', nargs='?', default='EverBatt 2023.xlsm',
+                        help='Path to EverBatt xlsm file (default: EverBatt 2023.xlsm)')
+    parser.add_argument('-s', '--search', type=str, default='LFP',
+                        help='Keyword to search for (default: LFP)')
+    parser.add_argument('-r', '--rows', type=int, default=30,
+                        help='Max rows to display per sheet (default: 30)')
+    parser.add_argument('-c', '--cols', type=int, default=8,
+                        help='Max columns to display per sheet (default: 8)')
+    parser.add_argument('--no-search', action='store_true',
+                        help='Skip keyword search')
+    args = parser.parse_args()
 
-    if len(sys.argv) > 1:
-        src = sys.argv[1]
+    # Step 1: Fix and read
+    fixed = fix_xlsm(args.file)
 
-    # Step 1: 修复
-    fixed = fix_xlsm(src)
-
-    # Step 2: 读取全部工作表（前 30 行）
+    # Step 2: Read all sheets
     print("\n" + "=" * 60)
-    print("  读取所有工作表内容")
+    print("  Reading all sheets")
     print("=" * 60)
-    read_all_sheets(fixed, max_rows=30, max_cols=8)
+    read_all_sheets(fixed, max_rows=args.rows, max_cols=args.cols)
 
-    # Step 3: 搜索关键数据
-    print("\n" + "=" * 60)
-    print("  搜索 'LFP' 相关数据")
-    print("=" * 60)
-    find_value(fixed, 'LFP')
+    # Step 3: Search
+    if not args.no_search:
+        print("\n" + "=" * 60)
+        print(f"  Searching for '{args.search}'")
+        print("=" * 60)
+        find_value(fixed, args.search)

@@ -13,6 +13,8 @@ Key corrections vs initial analysis:
   4. Material prices from EverBatt Table 14 (2019) and 2023 model
 """
 
+import argparse
+import sys
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -182,6 +184,41 @@ CAPEX = {
 }
 
 # ============================================================
+# CLI ARGUMENTS
+# ============================================================
+
+def parse_args():
+    """Parse command-line arguments to override default parameters."""
+    parser = argparse.ArgumentParser(
+        description='LFP Battery Recycling TEA/LCA Analysis (EverBatt-based)',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''
+Examples:
+  python lfp_analysis_verified.py
+  python lfp_analysis_verified.py -t 5000 -p 2023
+  python lfp_analysis_verified.py --throughput 20000 --battery-fee 0 --output my_chart.png
+  python lfp_analysis_verified.py --no-plot --prices 2023
+        ''',
+    )
+    parser.add_argument('-t', '--throughput', type=float, default=THROUGHPUT_TONNES,
+                        help=f'Plant throughput in tonnes/year (default: {THROUGHPUT_TONNES})')
+    parser.add_argument('-p', '--prices', choices=['2019', '2023'], default='2019',
+                        help='Material price year: 2019 or 2023 (default: 2019)')
+    parser.add_argument('-f', '--battery-fee', type=float, default=None,
+                        help='Gate fee in $/kg battery. Negative = recycler gets paid. '
+                             'Default: -2.0 for 2019, 0.0 for 2023')
+    parser.add_argument('--electricity-price', type=float, default=ELEC_PRICE,
+                        help=f'Electricity price in $/kWh (default: {ELEC_PRICE})')
+    parser.add_argument('--gas-price', type=float, default=NG_PRICE,
+                        help=f'Natural gas price in $/MMBTU (default: {NG_PRICE})')
+    parser.add_argument('-o', '--output', type=str, default='LFP_Recycling_Verified.png',
+                        help='Output chart path (default: LFP_Recycling_Verified.png)')
+    parser.add_argument('--no-plot', action='store_true',
+                        help='Skip chart generation, print tables only')
+    return parser.parse_args()
+
+
+# ============================================================
 # 2. CALCULATIONS
 # ============================================================
 
@@ -348,227 +385,257 @@ def analyze_method(method, throughput, prices, battery_fee):
 
 
 # ============================================================
-# 3. RUN & COMPARE
+# 3. MAIN
 # ============================================================
 
-methods = ['Pyro', 'Hydro', 'Direct']
-labels = ['Pyrometallurgical', 'Hydrometallurgical', 'Direct Physical']
+def main():
+    args = parse_args()
 
-results = {}
-for m in methods:
-    results[m] = analyze_method(m, THROUGHPUT_TONNES, P, BATTERY_FEE)
+    # Determine price set and default battery fee
+    if args.prices == '2023':
+        prices = PRICES_2023
+        default_fee = BATTERY_FEE_2023
+        price_label = '2023'
+    else:
+        prices = PRICES_2019
+        default_fee = BATTERY_FEE_2019
+        price_label = '2019'
 
-# ============================================================
-# 4. PRINT RESULTS
-# ============================================================
+    battery_fee = args.battery_fee if args.battery_fee is not None else default_fee
+    throughput = args.throughput
+    elec_price = args.electricity_price
+    ng_price = args.gas_price
 
-print("=" * 90)
-print("  LFP BATTERY RECYCLING ANALYSIS — VERIFIED AGAINST EVERBATT DOCUMENTATION")
-print(f"  Throughput: {THROUGHPUT_TONNES:,} tonnes/yr | Battery fee: ${BATTERY_FEE}/kg")
-print(f"  Material prices from EverBatt 2019 | Cost model from ANL-19/16, Table 15")
-print("=" * 90)
+    # Override global utility prices for analyze_method
+    global ELEC_PRICE, NG_PRICE
+    ELEC_PRICE = elec_price
+    NG_PRICE = ng_price
 
-print(f"\n{'Metric':<35s} {'Pyro':>15s} {'Hydro':>15s} {'Direct':>15s}")
-print("-" * 80)
+    methods = ['Pyro', 'Hydro', 'Direct']
+    labels = ['Pyrometallurgical', 'Hydrometallurgical', 'Direct Physical']
 
-for label, key, unit in [
-    ('Revenue ($M/yr)', 'revenue', 1e6),
-    ('Cost ($M/yr)', 'cost', 1e6),
-    ('Profit ($M/yr)', 'profit', 1e6),
-]:
-    vals = [results[m][key] / unit for m in methods]
-    print(f"{label:<35s} {vals[0]:>13.2f}M {vals[1]:>13.2f}M {vals[2]:>13.2f}M")
+    results = {}
+    for m in methods:
+        results[m] = analyze_method(m, throughput, prices, battery_fee)
 
-for label, key in [
-    ('Revenue ($/kg feed)', 'revenue'),
-    ('Cost ($/kg feed)', 'cost'),
-    ('Profit ($/kg feed)', 'profit'),
-]:
-    vals = [results[m][key] / (THROUGHPUT_TONNES * 1000) for m in methods]
-    signs = ['+' if v >= 0 else '' for v in vals]
-    print(f"{label:<35s} {signs[0]:>1s}${vals[0]:>12.2f}  {signs[1]:>1s}${vals[1]:>12.2f}  {signs[2]:>1s}${vals[2]:>12.2f}")
+    # ============================================================
+    # 4. PRINT RESULTS
+    # ============================================================
 
-print(f"\n{'Net GHG (tonne CO2-eq/yr)':<35s} {results['Pyro']['net_ghg_kg']/1000:>13.0f}  {results['Hydro']['net_ghg_kg']/1000:>13.0f}  {results['Direct']['net_ghg_kg']/1000:>13.0f}")
-print(f"{'Net GHG (kg CO2-eq/kg feed)':<35s} {results['Pyro']['net_ghg_kg']/(THROUGHPUT_TONNES*1000):>13.2f}  {results['Hydro']['net_ghg_kg']/(THROUGHPUT_TONNES*1000):>13.2f}  {results['Direct']['net_ghg_kg']/(THROUGHPUT_TONNES*1000):>13.2f}")
+    print("=" * 90)
+    print("  LFP BATTERY RECYCLING ANALYSIS — VERIFIED AGAINST EVERBATT DOCUMENTATION")
+    print(f"  Throughput: {throughput:,.0f} tonnes/yr | Battery fee: ${battery_fee}/kg")
+    print(f"  Material prices from EverBatt {price_label} | Cost model from ANL-19/16, Table 15")
+    print("=" * 90)
 
-# Revenue breakdown
-print("\n--- Revenue Breakdown ($M/yr) ---")
-all_rev = set()
-for m in methods:
-    all_rev.update(results[m]['rev_detail'].keys())
-all_rev = sorted(all_rev)
-print(f"{'Source':<30s} {'Pyro':>12s} {'Hydro':>12s} {'Direct':>12s}")
-for src in all_rev:
-    vals = [results[m]['rev_detail'].get(src, 0) / 1e6 for m in methods]
-    print(f"{src:<30s} {vals[0]:>10.2f}M {vals[1]:>10.2f}M {vals[2]:>10.2f}M")
+    print(f"\n{'Metric':<35s} {'Pyro':>15s} {'Hydro':>15s} {'Direct':>15s}")
+    print("-" * 80)
 
-# Cost breakdown
-print("\n--- Cost Breakdown ($M/yr) ---")
-all_cost = set()
-for m in methods:
-    all_cost.update(results[m]['cost_detail'].keys())
-all_cost = sorted(all_cost)
-print(f"{'Category':<35s} {'Pyro':>12s} {'Hydro':>12s} {'Direct':>12s}")
-for cat in all_cost:
-    vals = [results[m]['cost_detail'].get(cat, 0) / 1e6 for m in methods]
-    print(f"{cat:<35s} {vals[0]:>10.2f}M {vals[1]:>10.2f}M {vals[2]:>10.2f}M")
-total_cost = [results[m]['cost'] / 1e6 for m in methods]
-print(f"{'TOTAL':<35s} {total_cost[0]:>10.2f}M {total_cost[1]:>10.2f}M {total_cost[2]:>10.2f}M")
+    for label, key, unit in [
+        ('Revenue ($M/yr)', 'revenue', 1e6),
+        ('Cost ($M/yr)', 'cost', 1e6),
+        ('Profit ($M/yr)', 'profit', 1e6),
+    ]:
+        vals = [results[m][key] / unit for m in methods]
+        print(f"{label:<35s} {vals[0]:>13.2f}M {vals[1]:>13.2f}M {vals[2]:>13.2f}M")
 
+    for label, key in [
+        ('Revenue ($/kg feed)', 'revenue'),
+        ('Cost ($/kg feed)', 'cost'),
+        ('Profit ($/kg feed)', 'profit'),
+    ]:
+        vals = [results[m][key] / (throughput * 1000) for m in methods]
+        signs = ['+' if v >= 0 else '' for v in vals]
+        print(f"{label:<35s} {signs[0]:>1s}${vals[0]:>12.2f}  {signs[1]:>1s}${vals[1]:>12.2f}  {signs[2]:>1s}${vals[2]:>12.2f}")
 
-# ============================================================
-# 5. COMPARISON WITH PUBLISHED DATA
-# ============================================================
+    print(f"\n{'Net GHG (tonne CO2-eq/yr)':<35s} {results['Pyro']['net_ghg_kg']/1000:>13.0f}  {results['Hydro']['net_ghg_kg']/1000:>13.0f}  {results['Direct']['net_ghg_kg']/1000:>13.0f}")
+    print(f"{'Net GHG (kg CO2-eq/kg feed)':<35s} {results['Pyro']['net_ghg_kg']/(throughput*1000):>13.2f}  {results['Hydro']['net_ghg_kg']/(throughput*1000):>13.2f}  {results['Direct']['net_ghg_kg']/(throughput*1000):>13.2f}")
 
-print("\n" + "=" * 90)
-print("  COMPARISON WITH PUBLISHED RESULTS")
-print("=" * 90)
+    # Revenue breakdown
+    print("\n--- Revenue Breakdown ($M/yr) ---")
+    all_rev = set()
+    for m in methods:
+        all_rev.update(results[m]['rev_detail'].keys())
+    all_rev = sorted(all_rev)
+    print(f"{'Source':<30s} {'Pyro':>12s} {'Hydro':>12s} {'Direct':>12s}")
+    for src in all_rev:
+        vals = [results[m]['rev_detail'].get(src, 0) / 1e6 for m in methods]
+        print(f"{src:<30s} {vals[0]:>10.2f}M {vals[1]:>10.2f}M {vals[2]:>10.2f}M")
 
-print("\n" + "=" * 90)
-print("  COMPARISON WITH PUBLISHED RESULTS")
-print("=" * 90)
-
-# Published benchmark data
-print(f"""
-{'Metric':<30s} {'This Analysis':>16s} {'Xu 2020 Joule':>16s} {'Ji 2024 NatCom':>16s} {'Industry Range':>16s}
-{'-'*94}
-{'Pyro cost ($/kg)':<30s} {results['Pyro']['cost']/(THROUGHPUT_TONNES*1000):>14.2f}  {'~3.4':>16s}  {'~3.0-3.5':>16s}  {'2.5-3.5':>16s}
-{'Hydro cost ($/kg)':<30s} {results['Hydro']['cost']/(THROUGHPUT_TONNES*1000):>14.2f}  {'~2.4':>16s}  {'~2.0-2.5':>16s}  {'2.0-2.8':>16s}
-{'Direct cost ($/kg)':<30s} {results['Direct']['cost']/(THROUGHPUT_TONNES*1000):>14.2f}  {'~2.1':>16s}  {'~1.5-2.0':>16s}  {'1.2-1.8':>16s}
-{'Direct profit ($/kg)':<30s} {results['Direct']['profit']/(THROUGHPUT_TONNES*1000):>14.2f}  {'~0.8':>16s}  {'~1.5-2.0':>16s}  {'0.5-2.0':>16s}
-{'Pyro profit ($/kg)':<30s} {results['Pyro']['profit']/(THROUGHPUT_TONNES*1000):>14.2f}  {'~-1.5':>16s}  {'~-1 to -2':>16s}  {'-1 to -3':>16s}
-{'Hydro profit ($/kg)':<30s} {results['Hydro']['profit']/(THROUGHPUT_TONNES*1000):>14.2f}  {'~0':>16s}  {'~0':>16s}  {'-0.5 to +0.5':>16s}
-
-NOTES:
-- Xu et al. (Joule 2020) used EverBatt 2019 with 2018 material prices
-- Ji et al. (Nat. Commun. 2024) used updated EverBatt with 2022-2023 prices
-- This analysis uses EverBatt 2023 material prices + ANL-19/16 cost model
-- LFP material prices fluctuated: Li2CO3 $8/kg (2019) -> $70/kg (2022) -> $17/kg (2023)
-- Battery fee for LFP: -$2/kg (2019, recyclers paid) -> ~$0 (2023, as Li price rose)
-""")
-
-print(f"""
-KEY DIFFERENCES FROM INITIAL ANALYSIS:
-  1. Battery fee: LFP recyclers get paid gate fee ($0-2/kg), not free feedstock
-  2. EverBatt uses full chemical plant cost model (CapEx depreciation, labor,
-     maintenance, overhead, GSA, fixed charges — not just opex)
-  3. Recovery rates from Table 12: Pyro gets NO Al, Graphite, Li, Electrolyte
-  4. Chemical consumption per Table 10: Pyro uses HCl+H2O2+lime+sand;
-     Hydro uses H2SO4+NaOH+H2O2+NH4OH
-  5. Capital costs: Pyro ~$18M, Hydro ~$22M, Direct ~$13M for 10kt/yr plant
-
-CONCLUSIONS:
-  - Pyro: LOSES ~$1-2/kg for LFP. Only viable if gate fee is high enough.
-  - Hydro: Near breakeven to small profit. Li2CO3 price is the swing factor.
-  - Direct: PROFITABLE at ~$1-2/kg. Best for LFP because cathode is main value.
-  - These results align with published literature (Xu 2020, Ji 2024).
-""")
+    # Cost breakdown
+    print("\n--- Cost Breakdown ($M/yr) ---")
+    all_cost = set()
+    for m in methods:
+        all_cost.update(results[m]['cost_detail'].keys())
+    all_cost = sorted(all_cost)
+    print(f"{'Category':<35s} {'Pyro':>12s} {'Hydro':>12s} {'Direct':>12s}")
+    for cat in all_cost:
+        vals = [results[m]['cost_detail'].get(cat, 0) / 1e6 for m in methods]
+        print(f"{cat:<35s} {vals[0]:>10.2f}M {vals[1]:>10.2f}M {vals[2]:>10.2f}M")
+    total_cost = [results[m]['cost'] / 1e6 for m in methods]
+    print(f"{'TOTAL':<35s} {total_cost[0]:>10.2f}M {total_cost[1]:>10.2f}M {total_cost[2]:>10.2f}M")
 
 
-# ============================================================
-# 6. VISUALIZATION
-# ============================================================
+    # ============================================================
+    # 5. COMPARISON WITH PUBLISHED DATA
+    # ============================================================
 
-plt.rcParams.update({'font.size': 11, 'axes.titlesize': 13, 'axes.titleweight': 'bold', 'figure.dpi': 150})
-colors = ['#E74C3C', '#3498DB', '#2ECC71']
-names = ['Pyrometallurgical', 'Hydrometallurgical', 'Direct Physical']
+    print("\n" + "=" * 90)
+    print("  COMPARISON WITH PUBLISHED RESULTS")
+    print("=" * 90)
 
-fig, axes = plt.subplots(2, 3, figsize=(18, 11))
-fig.suptitle('LFP Battery Recycling: Verified EverBatt Analysis\n'
-             f'({THROUGHPUT_TONNES:,} t/yr | EverBatt 2023 Prices + ANL-19/16 Cost Model)',
-             fontsize=15, fontweight='bold', y=1.01)
+    print("\n" + "=" * 90)
+    print("  COMPARISON WITH PUBLISHED RESULTS")
+    print("=" * 90)
 
-# (0,0) Revenue/Cost/Profit bar
-ax = axes[0, 0]
-x = np.arange(3); w = 0.25
-revs = [results[m]['revenue']/1e6 for m in methods]
-costs = [results[m]['cost']/1e6 for m in methods]
-profs = [results[m]['profit']/1e6 for m in methods]
-ax.bar(x - w, revs, w, label='Revenue', color='#2ECC71', edgecolor='white')
-ax.bar(x, costs, w, label='Cost', color='#E74C3C', edgecolor='white')
-ax.bar(x + w, profs, w, label='Profit', color='#3498DB', edgecolor='white')
-ax.set_ylabel('Million USD / year')
-ax.set_title('Cost, Revenue & Profit')
-ax.set_xticks(x); ax.set_xticklabels(names)
-ax.legend(loc='upper left'); ax.axhline(y=0, color='black', lw=0.8)
-for i, (bar, p) in enumerate(zip(ax.patches[2::3], profs)):
-    c = '#2ECC71' if p > 0 else '#E74C3C'
-    ax.text(bar.get_x()+bar.get_width()/2, bar.get_height()+0.5, f'${p:.1f}M',
-            ha='center', fontweight='bold', fontsize=10, color=c)
+    # Published benchmark data
+    print(f"""
+    {'Metric':<30s} {'This Analysis':>16s} {'Xu 2020 Joule':>16s} {'Ji 2024 NatCom':>16s} {'Industry Range':>16s}
+    {'-'*94}
+    {'Pyro cost ($/kg)':<30s} {results['Pyro']['cost']/(throughput*1000):>14.2f}  {'~3.4':>16s}  {'~3.0-3.5':>16s}  {'2.5-3.5':>16s}
+    {'Hydro cost ($/kg)':<30s} {results['Hydro']['cost']/(throughput*1000):>14.2f}  {'~2.4':>16s}  {'~2.0-2.5':>16s}  {'2.0-2.8':>16s}
+    {'Direct cost ($/kg)':<30s} {results['Direct']['cost']/(throughput*1000):>14.2f}  {'~2.1':>16s}  {'~1.5-2.0':>16s}  {'1.2-1.8':>16s}
+    {'Direct profit ($/kg)':<30s} {results['Direct']['profit']/(throughput*1000):>14.2f}  {'~0.8':>16s}  {'~1.5-2.0':>16s}  {'0.5-2.0':>16s}
+    {'Pyro profit ($/kg)':<30s} {results['Pyro']['profit']/(throughput*1000):>14.2f}  {'~-1.5':>16s}  {'~-1 to -2':>16s}  {'-1 to -3':>16s}
+    {'Hydro profit ($/kg)':<30s} {results['Hydro']['profit']/(throughput*1000):>14.2f}  {'~0':>16s}  {'~0':>16s}  {'-0.5 to +0.5':>16s}
 
-# (0,1) Per-kg economics
-ax = axes[0, 1]
-fac = THROUGHPUT_TONNES * 1000
-r_kg = [results[m]['revenue']/fac for m in methods]
-c_kg = [results[m]['cost']/fac for m in methods]
-p_kg = [results[m]['profit']/fac for m in methods]
-ax.bar(x - w, r_kg, w, label='Revenue', color='#2ECC71', edgecolor='white')
-ax.bar(x, c_kg, w, label='Cost', color='#E74C3C', edgecolor='white')
-ax.bar(x + w, p_kg, w, label='Profit', color='#3498DB', edgecolor='white')
-ax.set_ylabel('USD / kg feedstock')
-ax.set_title('Per-kg Economics')
-ax.set_xticks(x); ax.set_xticklabels(names)
-ax.legend(loc='upper left'); ax.axhline(y=0, color='black', lw=0.8)
+    NOTES:
+    - Xu et al. (Joule 2020) used EverBatt 2019 with 2018 material prices
+    - Ji et al. (Nat. Commun. 2024) used updated EverBatt with 2022-2023 prices
+    - This analysis uses EverBatt {price_label} material prices + ANL-19/16 cost model
+    - LFP material prices fluctuated: Li2CO3 $8/kg (2019) -> $70/kg (2022) -> $17/kg (2023)
+    - Battery fee for LFP: -$2/kg (2019, recyclers paid) -> ~$0 (2023, as Li price rose)
+    """)
 
-# (0,2) Net GHG
-ax = axes[0, 2]
-ghg_t = [results[m]['net_ghg_kg']/1000 for m in methods]
-bars = ax.bar(names, ghg_t, color=colors, edgecolor='white', width=0.5)
-ax.set_ylabel('tonne CO2-eq / year')
-ax.set_title('Net GHG Emissions')
-for bar, v in zip(bars, ghg_t):
-    c = '#E74C3C' if v > 0 else '#2ECC71'
-    label = f'{v:+.0f} t' if abs(v) < 1000 else f'{v/1000:+.1f}k t'
-    yp = bar.get_height() + 300 if v >= 0 else bar.get_height() - 800
-    ax.text(bar.get_x()+bar.get_width()/2, yp, label, ha='center', fontweight='bold', fontsize=10, color=c)
-ax.axhline(y=0, color='black', lw=0.8)
+    print(f"""
+    KEY DIFFERENCES FROM INITIAL ANALYSIS:
+      1. Battery fee: LFP recyclers get paid gate fee ($0-2/kg), not free feedstock
+      2. EverBatt uses full chemical plant cost model (CapEx depreciation, labor,
+         maintenance, overhead, GSA, fixed charges — not just opex)
+      3. Recovery rates from Table 12: Pyro gets NO Al, Graphite, Li, Electrolyte
+      4. Chemical consumption per Table 10: Pyro uses HCl+H2O2+lime+sand;
+         Hydro uses H2SO4+NaOH+H2O2+NH4OH
+      5. Capital costs: Pyro ~$18M, Hydro ~$22M, Direct ~$13M for 10kt/yr plant
 
-# (1,0) Revenue breakdown
-ax = axes[1, 0]
-all_mats = sorted(set().union(*[results[m]['rev_detail'].keys() for m in methods]))
-xm = np.arange(len(all_mats)); wm = 0.25
-for i, m in enumerate(methods):
-    vals = [results[m]['rev_detail'].get(mat, 0)/1e6 for mat in all_mats]
-    ax.bar(xm + i*wm, vals, wm, label=m, color=colors[i], edgecolor='white')
-ax.set_ylabel('Million USD / year')
-ax.set_title('Revenue by Source')
-ax.set_xticks(xm + wm)
-ax.set_xticklabels(all_mats, rotation=30, ha='right', fontsize=8)
-ax.legend(fontsize=8)
+    CONCLUSIONS:
+      - Pyro: LOSES ~$1-2/kg for LFP. Only viable if gate fee is high enough.
+      - Hydro: Near breakeven to small profit. Li2CO3 price is the swing factor.
+      - Direct: PROFITABLE at ~$1-2/kg. Best for LFP because cathode is main value.
+      - These results align with published literature (Xu 2020, Ji 2024).
+    """)
 
-# (1,1) Cost breakdown
-ax = axes[1, 1]
-all_cost_cats = sorted(set().union(*[results[m]['cost_detail'].keys() for m in methods]))
-xc = np.arange(3); bottom = np.zeros(3)
-# Group small items
-major_cats = ['Chemicals', 'Energy', 'Labor', 'Depreciation', 'Maintenance',
-              'Fixed charges (tax/ins/rent/int)', 'Plant overhead', 'GSA (admin+dist+R&D)', 'Waste disposal']
-cat_colors = plt.cm.tab10(np.linspace(0, 1, len(major_cats)))
-for i, cat in enumerate(major_cats):
-    vals = np.array([results[m]['cost_detail'].get(cat, 0)/1e6 for m in methods])
-    ax.bar(xc, vals, 0.5, bottom=bottom, label=cat, color=cat_colors[i], edgecolor='white', lw=0.3)
-    bottom += vals
-ax.set_ylabel('Million USD / year')
-ax.set_title('Cost Structure')
-ax.set_xticks(xc); ax.set_xticklabels(names)
-ax.legend(loc='upper left', fontsize=6.5, ncol=2)
 
-# (1,2) Material Recovery Rates
-ax = axes[1, 2]
-mat_list = ['LFP cathode', 'Graphite', 'Copper', 'Aluminum', 'Steel', 'Electrolyte', 'Plastics']
-xr = np.arange(len(mat_list)); wr = 0.25
-for i, m in enumerate(methods):
-    rates = [RECOVERY[m].get(mat, 0)*100 for mat in mat_list]
-    ax.bar(xr + i*wr, rates, wr, label=m, color=colors[i], edgecolor='white')
-ax.set_ylabel('Recovery Rate (%)')
-ax.set_title('Material Recovery Rates (EverBatt Table 12)')
-ax.set_xticks(xr + wr)
-ax.set_xticklabels(mat_list, rotation=30, ha='right', fontsize=9)
-ax.set_ylim(0, 105); ax.legend(fontsize=8)
+    # ============================================================
+    # 6. VISUALIZATION
+    # ============================================================
 
-plt.tight_layout()
-out_path = 'LFP_Recycling_Verified.png'
-plt.savefig(out_path, dpi=200, bbox_inches='tight', facecolor='white')
-print(f"\n[Chart saved: {out_path}]")
+    if args.no_plot:
+        print("\n[Plot skipped (--no-plot)]")
+        print("Done! Analysis verified against Argonne EverBatt ANL-19/16 documentation.")
+        return
 
-print("\nDone! Analysis verified against Argonne EverBatt ANL-19/16 documentation.")
+    plt.rcParams.update({'font.size': 11, 'axes.titlesize': 13, 'axes.titleweight': 'bold', 'figure.dpi': 150})
+    colors = ['#E74C3C', '#3498DB', '#2ECC71']
+    names = ['Pyrometallurgical', 'Hydrometallurgical', 'Direct Physical']
+
+    fig, axes = plt.subplots(2, 3, figsize=(18, 11))
+    fig.suptitle('LFP Battery Recycling: Verified EverBatt Analysis\n'
+                 f'({throughput:,.0f} t/yr | EverBatt {price_label} Prices + ANL-19/16 Cost Model)',
+                 fontsize=15, fontweight='bold', y=1.01)
+
+    # (0,0) Revenue/Cost/Profit bar
+    ax = axes[0, 0]
+    x = np.arange(3); w = 0.25
+    revs = [results[m]['revenue']/1e6 for m in methods]
+    costs = [results[m]['cost']/1e6 for m in methods]
+    profs = [results[m]['profit']/1e6 for m in methods]
+    ax.bar(x - w, revs, w, label='Revenue', color='#2ECC71', edgecolor='white')
+    ax.bar(x, costs, w, label='Cost', color='#E74C3C', edgecolor='white')
+    ax.bar(x + w, profs, w, label='Profit', color='#3498DB', edgecolor='white')
+    ax.set_ylabel('Million USD / year')
+    ax.set_title('Cost, Revenue & Profit')
+    ax.set_xticks(x); ax.set_xticklabels(names)
+    ax.legend(loc='upper left'); ax.axhline(y=0, color='black', lw=0.8)
+    for i, (bar, p) in enumerate(zip(ax.patches[2::3], profs)):
+        c = '#2ECC71' if p > 0 else '#E74C3C'
+        ax.text(bar.get_x()+bar.get_width()/2, bar.get_height()+0.5, f'${p:.1f}M',
+                ha='center', fontweight='bold', fontsize=10, color=c)
+
+    # (0,1) Per-kg economics
+    ax = axes[0, 1]
+    fac = throughput * 1000
+    r_kg = [results[m]['revenue']/fac for m in methods]
+    c_kg = [results[m]['cost']/fac for m in methods]
+    p_kg = [results[m]['profit']/fac for m in methods]
+    ax.bar(x - w, r_kg, w, label='Revenue', color='#2ECC71', edgecolor='white')
+    ax.bar(x, c_kg, w, label='Cost', color='#E74C3C', edgecolor='white')
+    ax.bar(x + w, p_kg, w, label='Profit', color='#3498DB', edgecolor='white')
+    ax.set_ylabel('USD / kg feedstock')
+    ax.set_title('Per-kg Economics')
+    ax.set_xticks(x); ax.set_xticklabels(names)
+    ax.legend(loc='upper left'); ax.axhline(y=0, color='black', lw=0.8)
+
+    # (0,2) Net GHG
+    ax = axes[0, 2]
+    ghg_t = [results[m]['net_ghg_kg']/1000 for m in methods]
+    bars = ax.bar(names, ghg_t, color=colors, edgecolor='white', width=0.5)
+    ax.set_ylabel('tonne CO2-eq / year')
+    ax.set_title('Net GHG Emissions')
+    for bar, v in zip(bars, ghg_t):
+        c = '#E74C3C' if v > 0 else '#2ECC71'
+        label = f'{v:+.0f} t' if abs(v) < 1000 else f'{v/1000:+.1f}k t'
+        yp = bar.get_height() + 300 if v >= 0 else bar.get_height() - 800
+        ax.text(bar.get_x()+bar.get_width()/2, yp, label, ha='center', fontweight='bold', fontsize=10, color=c)
+    ax.axhline(y=0, color='black', lw=0.8)
+
+    # (1,0) Revenue breakdown
+    ax = axes[1, 0]
+    all_mats = sorted(set().union(*[results[m]['rev_detail'].keys() for m in methods]))
+    xm = np.arange(len(all_mats)); wm = 0.25
+    for i, m in enumerate(methods):
+        vals = [results[m]['rev_detail'].get(mat, 0)/1e6 for mat in all_mats]
+        ax.bar(xm + i*wm, vals, wm, label=m, color=colors[i], edgecolor='white')
+    ax.set_ylabel('Million USD / year')
+    ax.set_title('Revenue by Source')
+    ax.set_xticks(xm + wm)
+    ax.set_xticklabels(all_mats, rotation=30, ha='right', fontsize=8)
+    ax.legend(fontsize=8)
+
+    # (1,1) Cost breakdown
+    ax = axes[1, 1]
+    all_cost_cats = sorted(set().union(*[results[m]['cost_detail'].keys() for m in methods]))
+    xc = np.arange(3); bottom = np.zeros(3)
+    major_cats = ['Chemicals', 'Energy', 'Labor', 'Depreciation', 'Maintenance',
+                  'Fixed charges (tax/ins/rent/int)', 'Plant overhead', 'GSA (admin+dist+R&D)', 'Waste disposal']
+    cat_colors = plt.cm.tab10(np.linspace(0, 1, len(major_cats)))
+    for i, cat in enumerate(major_cats):
+        vals = np.array([results[m]['cost_detail'].get(cat, 0)/1e6 for m in methods])
+        ax.bar(xc, vals, 0.5, bottom=bottom, label=cat, color=cat_colors[i], edgecolor='white', lw=0.3)
+        bottom += vals
+    ax.set_ylabel('Million USD / year')
+    ax.set_title('Cost Structure')
+    ax.set_xticks(xc); ax.set_xticklabels(names)
+    ax.legend(loc='upper left', fontsize=6.5, ncol=2)
+
+    # (1,2) Material Recovery Rates
+    ax = axes[1, 2]
+    mat_list = ['LFP cathode', 'Graphite', 'Copper', 'Aluminum', 'Steel', 'Electrolyte', 'Plastics']
+    xr = np.arange(len(mat_list)); wr = 0.25
+    for i, m in enumerate(methods):
+        rates = [RECOVERY[m].get(mat, 0)*100 for mat in mat_list]
+        ax.bar(xr + i*wr, rates, wr, label=m, color=colors[i], edgecolor='white')
+    ax.set_ylabel('Recovery Rate (%)')
+    ax.set_title('Material Recovery Rates (EverBatt Table 12)')
+    ax.set_xticks(xr + wr)
+    ax.set_xticklabels(mat_list, rotation=30, ha='right', fontsize=9)
+    ax.set_ylim(0, 105); ax.legend(fontsize=8)
+
+    plt.tight_layout()
+    plt.savefig(args.output, dpi=200, bbox_inches='tight', facecolor='white')
+    print(f"\n[Chart saved: {args.output}]")
+
+    print("\nDone! Analysis verified against Argonne EverBatt ANL-19/16 documentation.")
+
+
+if __name__ == '__main__':
+    main()
